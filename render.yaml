@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: pwlegal-korean-law-api
+    env: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm run start
+    healthCheckPath: /v1/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: RATE_LIMIT_RPM
+        value: "60"
+      - key: LOG_LEVEL
+        value: info
+      - key: ALLOWED_ORIGINS
+        value: "*"
+      - key: MAX_RESPONSE_CHARS
+        value: "30000"
+      - key: TRUST_PROXY
+        value: "1"
+      - key: LAW_OC
+        sync: false
+      - key: SHIM_BEARER_TOKEN
+        sync: false

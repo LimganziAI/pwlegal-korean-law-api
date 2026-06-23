@@ -1,0 +1,158 @@
+openapi: 3.1.0
+info:
+  title: PLAYWITH Legal OS — Korean Law (법제처 직접 fallback)
+  version: "1.0.0"
+  description: >
+    ⚠️ 비상용(fallback) 스키마. **주축은 FINAL_05(shim) 스키마이며 본 파일은 shim 미가동 시에만 쓴다.**
+    shim(Option B/FINAL_05) 미가동 시 ChatGPT Actions가 법제처 DRF를 직접 호출.
+    primitive(검색/조회)만 커버한다. 별표 본문 추출·verify_citations·impact_map·chain류는 직결로는 불가(손실 명시 아래).
+    인증: query parameter OC. 직결은 OC가 URL에 노출됨(읽기전용 공개 API라 감수 가능하나 민감하면 shim 권장).
+
+    [중요/VERIFY — GPT Builder가 path fragment를 거부할 수 있음]
+    동일 endpoint(/DRF/lawSearch.do, /DRF/lawService.do)에 복수 operation을 두기 위해
+    path에 '#suffix'를 붙이는 방식(fragment trick)을 사용했다. ChatGPT GPT Builder가 이를 거부/병합할 수 있다.
+    거부 시 → 아래 'non-fragment 대안'으로 치환하라(파일 하단 'ALTERNATIVE' 주석에 그대로 붙일 수 있는 형태 수록):
+      • /lawSearch.do  단일 endpoint + target enum(law·prec·detc·decc·expc·trty·elaw·admrul·ordin·licbyl) 분기 — operationId 1개(drfSearch)
+      • /lawService.do 단일 endpoint + target enum(동일) 분기 — operationId 1개(drfService)
+      GPT가 target 파라미터로 코퍼스를 선택하므로 fragment 없이 operationId 충돌이 사라진다.
+    Genspark 초안은 이 트릭을 쓰면서 components.responses를 정의하지 않아 $ref가 깨졌다 — 본 스키마는 그 버그를 수정했다.
+    (요약: 정상 경로 = FINAL_05 shim. 본 05B는 비상용이며, fragment 거부 시 위 2-operation 방식으로 축소.)
+servers:
+  - url: https://www.law.go.kr
+    description: 국가법령정보센터 공식 OPEN API host
+security:
+  - lawOpenApiKey: []
+components:
+  securitySchemes:
+    lawOpenApiKey:
+      type: apiKey
+      in: query
+      name: OC
+      description: >
+        법제처 국가법령정보 공동활용 OPEN API 인증키(회사명의 발급·서버 등록).
+        실제 키는 GPT Builder > Actions > Authentication 에서만 입력. 파라미터명은 대문자 OC(소문자 oc 허용 여부 [VERIFY]).
+  responses:
+    Error:
+      description: 오류
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        error: { type: string }
+    GenericResult:
+      type: object
+      additionalProperties: true
+      description: >
+        DRF 응답은 target별로 schema가 가변적이라 additionalProperties=true.
+        GPT가 후처리하며 totalCnt 등으로 결과 유무를 판정. 판례 본문 등은 HTML로 올 수 있음(JSON 강제해도 일부 미지원).
+paths:
+  /DRF/lawSearch.do#searchLawDirect:
+    get:
+      operationId: searchLawDirect
+      summary: 법령 검색(현행). target=law.
+      parameters:
+        - { name: target, in: query, required: true, schema: { type: string, enum: [law], default: law } }
+        - { name: type, in: query, required: true, schema: { type: string, enum: [JSON], default: JSON } }
+        - { name: query, in: query, required: true, schema: { type: string } }
+        - { name: search, in: query, required: false, schema: { type: integer, enum: [1, 2], default: 1 }, description: 1법령명/2본문 }
+        - { name: display, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+        - { name: page, in: query, required: false, schema: { type: integer, default: 1 } }
+        - { name: efYd, in: query, required: false, schema: { type: string }, description: "시행일 범위 yyyymmdd~yyyymmdd" }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericResult' } } } }
+        default: { $ref: '#/components/responses/Error' }
+  /DRF/lawService.do#getLawTextDirect:
+    get:
+      operationId: getLawTextDirect
+      summary: 법령 본문/조문 조회. ID 또는 MST 또는 LM 중 1개 필수.
+      parameters:
+        - { name: target, in: query, required: true, schema: { type: string, enum: [law], default: law } }
+        - { name: type, in: query, required: true, schema: { type: string, enum: [JSON], default: JSON } }
+        - { name: ID, in: query, required: false, schema: { type: string }, description: 법령ID }
+        - { name: MST, in: query, required: false, schema: { type: string }, description: 법령일련번호 }
+        - { name: LM, in: query, required: false, schema: { type: string }, description: 법령명(ID/MST 없을 때) }
+        - { name: JO, in: query, required: false, schema: { type: string }, description: "조번호 6자리(예 039800=제398조, 000200=제2조). [VERIFY] 조의N 분기 자리수 규칙" }
+        - { name: efYd, in: query, required: false, schema: { type: string } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericResult' } } } }
+        default: { $ref: '#/components/responses/Error' }
+  /DRF/lawSearch.do#searchDecisionDirect:
+    get:
+      operationId: searchDecisionDirect
+      summary: "결정례 검색(target으로 코퍼스 선택)."
+      description: >
+        target 코드(법제처 DRF): prec=판례, detc=헌재결정, decc=행정심판재결[VERIFY], expc=법령해석례(법제처·국세청),
+        trty=조약, elaw=영문법령, admrul=행정규칙, ordin=자치법규.
+        공정위/개인정보위 결정문은 법제처 직결 미흡 → 공공데이터포털(odcloud) 별도 또는 shim 필요. [VERIFY]
+      parameters:
+        - name: target
+          in: query
+          required: true
+          schema: { type: string, enum: [prec, detc, decc, expc, trty, elaw, admrul, ordin] }
+        - { name: type, in: query, required: true, schema: { type: string, enum: [JSON], default: JSON } }
+        - { name: query, in: query, required: false, schema: { type: string } }
+        - { name: org, in: query, required: false, schema: { type: string }, description: "판례 법원종류 400201대법원/400202하위 등" }
+        - { name: prncYd, in: query, required: false, schema: { type: string }, description: "선고일 범위 yyyymmdd~yyyymmdd" }
+        - { name: display, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+        - { name: page, in: query, required: false, schema: { type: integer, default: 1 } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericResult' } } } }
+        default: { $ref: '#/components/responses/Error' }
+  /DRF/lawService.do#getDecisionTextDirect:
+    get:
+      operationId: getDecisionTextDirect
+      summary: "결정례 본문 조회(target+ID). 판례 본문은 HTML로 올 수 있음."
+      parameters:
+        - name: target
+          in: query
+          required: true
+          schema: { type: string, enum: [prec, detc, decc, expc, trty, elaw, admrul, ordin] }
+        - { name: type, in: query, required: true, schema: { type: string, enum: [JSON, HTML], default: JSON } }
+        - { name: ID, in: query, required: true, schema: { type: string } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericResult' } } } }
+        default: { $ref: '#/components/responses/Error' }
+  /DRF/lawSearch.do#searchAdminRuleDirect:
+    get:
+      operationId: searchAdminRuleDirect
+      summary: 행정규칙 검색. target=admrul.
+      parameters:
+        - { name: target, in: query, required: true, schema: { type: string, enum: [admrul], default: admrul } }
+        - { name: type, in: query, required: true, schema: { type: string, enum: [JSON], default: JSON } }
+        - { name: query, in: query, required: false, schema: { type: string } }
+        - { name: knd, in: query, required: false, schema: { type: integer, enum: [1, 2, 3, 4, 5, 6] }, description: 1훈령/2예규/3고시/4공고/5지침/6기타 }
+        - { name: display, in: query, required: false, schema: { type: integer, maximum: 100, default: 20 } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericResult' } } } }
+        default: { $ref: '#/components/responses/Error' }
+  /DRF/lawService.do#getAnnexMetaDirect:
+    get:
+      operationId: getAnnexMetaDirect
+      summary: "별표/서식 메타데이터(target=licbyl [VERIFY]). 본문 HWP/PDF는 추출 불가 → 다운로드 URL만."
+      parameters:
+        - { name: target, in: query, required: true, schema: { type: string, enum: [licbyl], default: licbyl }, description: "[VERIFY] 별표 target 코드" }
+        - { name: type, in: query, required: true, schema: { type: string, enum: [JSON], default: JSON } }
+        - { name: ID, in: query, required: false, schema: { type: string } }
+        - { name: MST, in: query, required: false, schema: { type: string } }
+      responses:
+        '200': { description: "메타데이터(+파일 URL). 본문 추출은 shim 필요.", content: { application/json: { schema: { $ref: '#/components/schemas/GenericResult' } } } }
+        default: { $ref: '#/components/responses/Error' }
+
+# =============================================================================
+# 직결 fallback의 기능 손실 (반드시 인지)
+# - 별표 본문 전문 추출: ❌ (HWP/PDF 바이너리. 메타데이터+URL만) → 본문 필요 시 shim(FINAL_05)
+# - verifyCitations: ❌ (다중 호출 오케스트레이션) → GPT 재구성 or shim
+# - impactMap: ❌ (멀티도메인 병렬) → GPT 재구성 or shim
+# - chain_*: ❌ (다단) → GPT reasoning + primitive 순차호출
+# - JSON 정규화: 일부 ❌ (판례 본문 HTML 다수) → GPT 파싱 부담
+# - Referer/IP whitelist: [VERIFY] 일부 endpoint가 Referer 검사 가능 → 필요 시 shim 경유
+#
+# ALTERNATIVE (fragment trick 거부 시): 아래처럼 2 operation으로 축소(보장 유효)
+#   paths:
+#     /DRF/lawSearch.do:   { get: { operationId: drfSearch,  parameters: [ target(enum: law,prec,detc,decc,expc,trty,elaw,admrul,ordin,licbyl), type, query, display, page ] } }
+#     /DRF/lawService.do:  { get: { operationId: drfService, parameters: [ target(동일 enum), type, ID, MST, LM, JO ] } }
+#   GPT가 target을 설정해 코퍼스를 선택. operationId 충돌 없음.
+# =============================================================================

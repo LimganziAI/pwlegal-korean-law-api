@@ -1,0 +1,375 @@
+openapi: 3.1.0
+info:
+  title: PLAYWITH Legal OS — Korean Law (MCP shim)
+  version: "1.0.0"
+  description: >
+    Option B 권장 스키마. 자체 호스팅 Korean Law MCP(v4.1.1) 앞단의 REST shim.
+    shim이 내부적으로 MCP tools/call(JSON-RPC) 또는 lib 함수를 호출하고 정규화 JSON을 반환한다.
+    - 모든 operation은 고유 path를 가진다(법제처 직결 fragment trick 미사용 → GPT Builder 호환성 확보).
+    - 인증: shim 자체 Bearer 토큰. 법제처 OC는 shim 서버 env(LAW_OC)에만 보관하며 ChatGPT에 노출하지 않는다.
+    - 서버 URL/토큰은 placeholder. 실제 값은 GPT Builder > Actions > Authentication 에서만 입력.
+    - [VERIFY] 표시 항목은 너의 shim 구현/법제처 응답으로 확정할 것.
+servers:
+  - url: https://YOUR-SHIM-HOST.example.com
+    description: "[VERIFY] 너의 shim 배포 도메인(fly.io/Render/Cloudflare 등)"
+security:
+  - shimBearer: []
+components:
+  securitySchemes:
+    shimBearer:
+      type: http
+      scheme: bearer
+      description: shim 자체 발급 토큰. 법제처 OC와 무관. ChatGPT Actions Authentication(API Key, Bearer)에 입력.
+  responses:
+    Error:
+      description: 표준 오류 응답
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        error: { type: string, description: 오류 메시지(키·내부경로 미포함) }
+        status: { type: integer }
+        sourceUrl: { type: string, description: 유래한 공식 sourceUrl(있으면) }
+    LawSearchResult:
+      type: object
+      properties:
+        total: { type: integer, description: 검색 총 건수 }
+        results:
+          type: array
+          items:
+            type: object
+            properties:
+              name: { type: string, description: 법령명 }
+              lawId: { type: string }
+              mst: { type: string, description: 법령일련번호 }
+              promulgationDate: { type: string, description: 공포일 YYYYMMDD }
+              effectiveDate: { type: string, description: 시행일 YYYYMMDD }
+              ministry: { type: string }
+              kind: { type: string, description: 법률/대통령령/부령 등 }
+        sourceUrl: { type: string }
+    LawTextResult:
+      type: object
+      properties:
+        lawName: { type: string }
+        effectiveDate: { type: string }
+        article: { type: string, description: 조문 위치(예 제398조) }
+        text: { type: string, description: 조문 전문(정규화된 텍스트) }
+        notFound: { type: boolean, description: "true면 LLM은 조문을 추측·생성하지 말 것" }
+        sourceUrl: { type: string }
+    DecisionSearchResult:
+      type: object
+      properties:
+        total: { type: integer }
+        domain: { type: string }
+        results:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string, description: 일련번호/ID }
+              caseName: { type: string }
+              caseNumber: { type: string }
+              court: { type: string }
+              date: { type: string }
+              sourceUrl: { type: string }
+    DecisionTextResult:
+      type: object
+      properties:
+        domain: { type: string }
+        id: { type: string }
+        title: { type: string }
+        text: { type: string }
+        sourceUrl: { type: string }
+    AnnexResult:
+      type: object
+      description: 별표/서식. bylSeq 지정 시 본문 추출(서버측 HWP/PDF). 이미지형이면 text 없이 downloadUrl만.
+      properties:
+        lawName: { type: string }
+        annexes:
+          type: array
+          items:
+            type: object
+            properties:
+              bylSeq: { type: string }
+              title: { type: string }
+              kind: { type: string, description: 별표/서식/부칙별표 등 }
+        text: { type: string, description: bylSeq 지정 시 추출된 별표 본문(가능한 경우) }
+        downloadUrl: { type: string, description: 추출 불가(이미지 PDF) 시 파일 링크 }
+        extractable: { type: boolean }
+        sourceUrl: { type: string }
+    VerifyCitationsResult:
+      type: object
+      description: >
+        인용 검증. needsReview(⚠)는 통과가 아니다 — 실존 조문도 가짜 조문도 ⚠로 나올 수 있다.
+        verified만 사용 가능, notFound는 환각 보고, needsReview는 getLawText로 사람 확정 or [VERIFY].
+      properties:
+        total: { type: integer }
+        verified: { type: integer }
+        notFound: { type: integer }
+        needsReview: { type: integer, description: "⚠ 사람 확정 필요(clean pass 아님)" }
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              citation: { type: string }
+              status: { type: string, enum: [verified, not_found, needs_review] }
+              note: { type: string }
+        hallucinationDetected: { type: boolean }
+    ImpactMapResult:
+      type: object
+      description: 조문 역방향 인용그래프. 키워드 과매칭(예 제103조↔제1032조) 가능 → 결과는 사람 필터.
+      properties:
+        lawName: { type: string }
+        article: { type: string }
+        articleText: { type: string }
+        citedBy:
+          type: object
+          properties:
+            precedent: { type: array, items: { type: object } }
+            constitutional: { type: array, items: { type: object } }
+            interpretation: { type: array, items: { type: object } }
+            adminAppeal: { type: array, items: { type: object } }
+            ordinance: { type: array, items: { type: object } }
+        mermaid: { type: string }
+        overmatchWarning: { type: string, description: 과매칭 가능성 안내 }
+    AmendmentHistoryResult:
+      type: object
+      properties:
+        lawName: { type: string }
+        history:
+          type: array
+          items:
+            type: object
+            properties:
+              promulgationDate: { type: string }
+              effectiveDate: { type: string }
+              amendmentType: { type: string }
+              summary: { type: string }
+        sourceUrl: { type: string }
+    HealthResult:
+      type: object
+      properties:
+        status: { type: string }
+        version: { type: string }
+        exposedTools: { type: integer, description: "[VERIFY] 너의 빌드 노출 도구 수" }
+        catalogTools: { type: integer }
+paths:
+  /v1/searchLaw:
+    post:
+      operationId: searchLaw
+      summary: 법령명으로 식별자(lawId/MST) 검색. 약칭 자동변환.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [query]
+              properties:
+                query: { type: string, description: "법령명 또는 본문 키워드(예: 상법, 게임산업진흥에 관한 법률)" }
+                display: { type: integer, default: 50, minimum: 1, maximum: 100 }
+                page: { type: integer, default: 1 }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LawSearchResult' }
+        default: { $ref: '#/components/responses/Error' }
+  /v1/getLawText:
+    post:
+      operationId: getLawText
+      summary: 조문 전문 조회(mst 또는 lawId 필수, jo로 특정 조문).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                mst: { type: string, description: 법령일련번호(searchLaw 결과) }
+                lawId: { type: string }
+                jo: { type: string, description: "조문 번호(예: 제398조). shim이 6자리 코드로 변환" }
+                efYd: { type: string, description: 시행일 기준 시점법령 YYYYMMDD }
+      responses:
+        '200':
+          description: OK. notFound=true면 조문 추측 금지.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LawTextResult' }
+        default: { $ref: '#/components/responses/Error' }
+  /v1/searchDecision:
+    post:
+      operationId: searchDecision
+      summary: 18개 도메인 결정례 통합검색.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [domain]
+              properties:
+                domain:
+                  type: string
+                  enum: [precedent, interpretation, tax_tribunal, customs, nts, constitutional, admin_appeal, ftc, pipc, nlrc, acr, appeal_review, acr_special, school, public_corp, public_inst, treaty, english_law]
+                query: { type: string }
+                display: { type: integer, default: 20, minimum: 1, maximum: 100 }
+                page: { type: integer, default: 1 }
+                sort: { type: string, enum: [lasc, ldes, dasc, ddes, nasc, ndes] }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DecisionSearchResult' }
+        default: { $ref: '#/components/responses/Error' }
+  /v1/getDecisionText:
+    post:
+      operationId: getDecisionText
+      summary: 결정례 전문 조회. shim이 HTML 본문을 정규화.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [domain, id]
+              properties:
+                domain: { type: string }
+                id: { type: string }
+                full: { type: boolean, description: "true=전문, 미지정=계단식 축약" }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DecisionTextResult' }
+        default: { $ref: '#/components/responses/Error' }
+  /v1/getAnnex:
+    post:
+      operationId: getAnnex
+      summary: 별표/서식 목록 또는 본문(서버측 HWP/PDF 추출).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [lawName]
+              properties:
+                lawName: { type: string, description: "예: 게임산업진흥에 관한 법률 시행령" }
+                knd: { type: string, enum: ["1", "2", "3", "4", "5"], description: 1별표/2서식/3부칙별표/4부칙서식/5전체 }
+                bylSeq: { type: string, description: "지정 시 본문 추출(예 000302)" }
+                annexNo: { type: string, description: "bylSeq 대체(예 별표4)" }
+      responses:
+        '200':
+          description: OK. 이미지형 PDF면 text 없이 downloadUrl만.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnnexResult' }
+        default: { $ref: '#/components/responses/Error' }
+  /v1/verifyCitations:
+    post:
+      operationId: verifyCitations
+      summary: 텍스트 내 조문 인용 실존 검증(환각 방지).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text]
+              properties:
+                text: { type: string, description: "검증할 법률 텍스트(조문 인용 포함)" }
+                maxCitations: { type: integer, default: 15, minimum: 1, maximum: 30 }
+      responses:
+        '200':
+          description: OK. needsReview(⚠)는 사람 확정 필요. notFound는 환각 보고.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VerifyCitationsResult' }
+        default: { $ref: '#/components/responses/Error' }
+  /v1/impactMap:
+    post:
+      operationId: impactMap
+      summary: 조문 역방향 인용그래프(판례·헌재·해석례·행심·자치법규) + mermaid.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [lawName, jo]
+              properties:
+                lawName: { type: string }
+                jo: { type: string, description: "예: 제103조" }
+                includeOrdinances: { type: boolean, default: false }
+                includeMermaid: { type: boolean, default: true }
+      responses:
+        '200':
+          description: OK. 결과는 과매칭 가능 → 사람 필터.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ImpactMapResult' }
+        default: { $ref: '#/components/responses/Error' }
+  /v1/searchAdminRule:
+    post:
+      operationId: searchAdminRule
+      summary: 행정규칙(훈령/예규/고시/공고/지침) 검색.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [query]
+              properties:
+                query: { type: string }
+                knd: { type: integer, enum: [1, 2, 3, 4, 5, 6], description: 1훈령/2예규/3고시/4공고/5지침/6기타 }
+                display: { type: integer, default: 20, maximum: 100 }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DecisionSearchResult' }
+        default: { $ref: '#/components/responses/Error' }
+  /v1/amendmentTrack:
+    post:
+      operationId: amendmentTrack
+      summary: 법령 개정이력(신구대조·연혁) 조회.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                mst: { type: string }
+                lawId: { type: string }
+                lawName: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AmendmentHistoryResult' }
+        default: { $ref: '#/components/responses/Error' }
+  /v1/health:
+    get:
+      operationId: healthCheck
+      summary: shim/MCP 상태 점검.
+      security: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HealthResult' }
+        default: { $ref: '#/components/responses/Error' }

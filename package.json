@@ -1,0 +1,83 @@
+{
+  "name": "pwlegal-korean-law-api",
+  "version": "1.0.0",
+  "description": "PLAYWITH Legal OS Korean law REST shim API for ChatGPT Actions",
+  "type": "module",
+  "main": "build/index.js",
+  "types": "build/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./build/index.d.ts",
+      "import": "./build/index.js"
+    },
+    "./lib/*": {
+      "types": "./build/lib/*.d.ts",
+      "import": "./build/lib/*.js"
+    },
+    "./tools/*": {
+      "types": "./build/tools/*.d.ts",
+      "import": "./build/tools/*.js"
+    },
+    "./server/*": {
+      "types": "./build/server/*.d.ts",
+      "import": "./build/server/*.js"
+    }
+  },
+  "bin": {
+    "korean-law-mcp": "build/index.js",
+    "korean-law": "build/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "start": "node build/index.js --mode http --port ${PORT:-3000}",
+    "cli": "node build/cli.js",
+    "prepublishOnly": "npm run build",
+    "start:mcp": "node build/index.js --mode http --port ${PORT:-3000}",
+    "start:actions": "node build/server/actions-server.js",
+    "dev:mcp": "npm run build && node build/index.js --mode http --port 3000",
+    "dev": "npm run build && node build/index.js --mode http --port 3000",
+    "smoke:health": "node -e \"fetch(`http://localhost:${process.env.PORT||3000}/v1/health`).then(r=>r.text()).then(console.log)\""
+  },
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "korean-law",
+    "법령",
+    "판례",
+    "법제처",
+    "claude",
+    "model-context-protocol",
+    "legal-ai",
+    "cli"
+  ],
+  "author": "Chris",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "@xmldom/xmldom": "^0.9.8",
+    "commander": "^14.0.3",
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
+    "kordoc": "^2.4.0",
+    "pdfjs-dist": "^5.5.207",
+    "zod": "^3.25.76 || ^4.0.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^22.19.3",
+    "typescript": "^5.9.3"
+  },
+  "files": [
+    "build",
+    "README.md",
+    "LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/playwithlawkr/pwlegal-korean-law-api.git"
+  },
+  "engines": {
+    "node": ">=20.19.0"
+  }
+}
